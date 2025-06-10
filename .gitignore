@@ -125,6 +125,7 @@ pyrightconfig.json
 *.json
 *.yaml
 *.yml
+*.fits
 ccd_reductions_data/
 
 
