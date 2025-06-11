@@ -11,6 +11,7 @@ import os
 import pathlib
 import pytest
 from photutils.datasets import load_star_image
+import seaborn as sns
 
 from astroscrappy import detect_cosmics
 
@@ -52,7 +53,7 @@ def create_median_bias():
     plt.savefig(Path("Twin_Bias.png"), dpi=150)
     plt.show()
     
-    output_path = Path("Twin Images") / output_file
+    output_path = Path("Twin_Images") / output_file
     primary = fits.PrimaryHDU(data=data_for_plot, header=fits.Header())
     hdul = fits.HDUList([primary])
     hdul.writeto(output_path, overwrite=True)
@@ -60,7 +61,7 @@ def create_median_bias():
     return data_for_plot
 
 def create_median_dark():
-    bias_filename = Path("Twin Images") / "twin_master_bias.fits"
+    bias_filename = Path("Twin_Images") / "twin_master_bias.fits"
     output_file = Path('twin_master_dark.fits')
     bias_frame = fits.getdata(bias_filename).astype('f4')
     input_dir = Path("Data")
@@ -88,7 +89,7 @@ def create_median_dark():
     plt.savefig(Path("Twin_Darks.png"), dpi=150)
     plt.show()
     
-    output_path = Path("Twin Images") / output_file
+    output_path = Path("Twin_Images") / output_file
     primary = fits.PrimaryHDU(data=data_dark, header=fits.Header())
     hdul = fits.HDUList([primary])
     hdul.writeto(output_path, overwrite=True)
@@ -97,10 +98,10 @@ def create_median_dark():
 
     
 def create_median_flat():
-    bias_filename = Path("Twin Images") / "twin_master_bias.fits"
+    bias_filename = Path("Twin_Images") / "twin_master_bias.fits"
     dark_filename = Path("Twin Images") / "twin_master_dark.fits"
     
-    output_file = Path("Twin Images") / 'twin_master_flat.fits'
+    output_file = Path("Twin_Images") / 'twin_master_flat.fits'
     input_dir = Path("Data")
 
     bias_frame = fits.getdata(bias_filename).astype('f4')
@@ -124,7 +125,7 @@ def create_median_flat():
     vmin, vmax = np.percentile(median_flat, [1, 99])
     plt.imshow(median_flat, origin='lower', cmap='gray', vmin=vmin, vmax=vmax)
     plt.colorbar(label='Counts')
-    plt.savefig(Path("Twin Images") / "Twin_Flats.png", dpi=150)
+    plt.savefig(Path("Twin_Images") / "Twin_Flats.png", dpi=150)
     plt.show()
     
     
@@ -134,15 +135,72 @@ def create_median_flat():
 
     return median_flat
 
+def reduce_science_frame():
+
+    bias_filename = Path("Twin_Images") / "twin_master_bias.fits"
+    dark_filename = Path("Twin_Images") / "twin_master_dark.fits"
+    flat_filename = Path("Twin_Images") / "twin_master_flat.fits"
+    
+    output_file = Path("Twin_Images") / 'twin_science_reduced.fits'
+    input_dir = Path("Data")
+
+    bias_frame = fits.getdata(bias_filename).astype('f4')
+    flat_frame = fits.getdata(flat_filename).astype('f4')
+    dark_frame = fits.getdata(dark_filename).astype('f4')
+
+    #Opening science stuff and trimming/float 32 
+    for f in sorted(input_dir.glob('BFLY*.fits')):
+        with fits.open(f) as science:
+            data_s = science[0].data.astype('f4')
+
+        #Getting the exposure time from header
+            header = science[0].header
+            exptime = science[0].header['EXPTIME']
+  
+    #Removing bias signal
+    sub_bias = data_s - bias_frame
+
+    #Subtracting dark frame with corrected exptime
+    dark_corrected = sub_bias - dark_frame * exptime
+
+    #Normalizing the flat
+    flat_norm = flat_frame / np.mean(flat_frame)
+
+    #Normalzing even more 
+    corrected_science = dark_corrected / flat_norm
+    
+    #Getting rid of cosmic rays
+    mask, cleaned = detect_cosmics(corrected_science)
+    reduced_science = cleaned
+
+    plt.imshow(reduced_science, cmap = 'inferno', origin = 'lower', aspect = 'auto')
+    plt.colorbar()
+    plt.savefig(Path("Twin_Images") / 'Twin_reduced_science.png')
+    plt.tight_layout()
+    plt.close()
+    
+
+    #Saving
+    primary = fits.PrimaryHDU(data=reduced_science, header=fits.Header())
+    hdul = fits.HDUList([primary])
+    hdul.writeto(output_file, overwrite=True)
+
+    return 
 
 
-def do_aperture_photometry(image, positions, radii, sky_radius_in, sky_annulus_width):
 
+def do_aperture_photometry(positions, radii):
+
+    output_file = Path("Twin_Images") / 'Twin_aperture_photometry.fits'
+    input_dir = Path("Twin_Images")
+
+    
+    
     #Opening the data and turning it into flaot 32
-    with fits.open(image) as im:
-        image_data = im[0].data.astype('f4')
+    for f in sorted(input_dir.glob('Twin_Images/twin_science_reduced.fits')):
+        with fits.open(f) as image:
+            image_data = image[0].data.astype('f4')
 
-    #Creating an empty list to store data in
     rows = []
 
     #Doing a loop over the star
@@ -168,6 +226,13 @@ def do_aperture_photometry(image, positions, radii, sky_radius_in, sky_annulus_w
 
             #Storing results in dictionary with star position and flux 
             row[f'flux_r{int(r)}'] = flux
+            plt.plot(flux, label=f'Radius {r}')
+            
+        plt.imshow(image_data, cmap = 'inferno', origin = 'lower', aspect = 'auto')
+        plt.colorbar()
+        plt.savefig(Path("Twin_Images") / 'Twin_photometry.png')
+        plt.tight_layout()
+        plt.close()
 
         #Putting the data into emtpy list
         rows.append(row)
@@ -176,10 +241,20 @@ def do_aperture_photometry(image, positions, radii, sky_radius_in, sky_annulus_w
     table = Table(rows)
     table.meta['radii'] = radii
     table.meta['sky_radius'] = sky_radius_in
+
+    plt.imshow(image_data, cmap = 'inferno', origin = 'lower', aspect = 'auto')
+    plt.colorbar()
+    plt.savefig(Path("Twin_Images") / 'Twin_photometry.png')
+    plt.tight_layout()
+    plt.close()
+
+    table.write(output_file, format='fits', overwrite=True)
+
     
-    return table
-
-
+    return 
+#if __name__ == "__main__":
+ #   photometry = do_aperture_photometry(positions, radii)
+  #  print("It has printed")
 
 def plot_radial_profile(aperture_photometry_data, output_filename="radial_profile.png"):
 
@@ -343,41 +418,4 @@ def run_reduction(data_dir):
 
     return 
 
-def reduce_science_frame(science_filename, median_bias_filename, median_flat_filename, median_dark_filename, reduced_science_filename="reduced_science.fits"):
-
-    #Opening each file and turning it into float 32
-    bias_frame = fits.getdata(median_bias_filename).astype('f4')
-    flat_frame = fits.getdata(median_flat_filename).astype('f4')
-    dark_frame = fits.getdata(median_dark_filename).astype('f4')
-
-    #Opening science stuff and trimming/float 32 
-    with fits.open(science_filename) as science:
-        data_s = science[0].data.astype('f4')[1000:1500, 2000:2500]
-
-        #Getting the exposure time from header
-        header = science[0].header
-        exptime = science[0].header['EXPTIME']
-  
-    #Removing bias signal
-    sub_bias = data_s - bias_frame
-
-    #Subtracting dark frame with corrected exptime
-    dark_corrected = sub_bias - dark_frame * exptime
-
-    #Normalizing the flat
-    flat_norm = flat_frame / np.mean(flat_frame)
-
-    #Normalzing even more 
-    corrected_science = dark_corrected / flat_norm
-    
-    #Getting rid of cosmic rays
-    mask, cleaned = detect_cosmics(corrected_science)
-    reduced_science = cleaned
-
-    #Saving
-    hdu = fits.PrimaryHDU(data=reduced_science)
-    hdu.writeto(str(reduced_science_filename), overwrite = True)
-
-    return reduced_science
-  
 
