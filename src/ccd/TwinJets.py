@@ -173,7 +173,7 @@ def reduce_science_frame():
     mask, cleaned = detect_cosmics(corrected_science)
     reduced_science = cleaned
 
-    plt.imshow(reduced_science, cmap = 'inferno', origin = 'lower', aspect = 'auto')
+    plt.imshow(reduced_science, cmap = 'magma', origin = 'lower', aspect = 'auto')
     plt.colorbar()
     plt.savefig(Path("Twin_Images") / 'Twin_reduced_science.png')
     plt.tight_layout()
@@ -188,234 +188,73 @@ def reduce_science_frame():
     return 
 
 
+if __name__ == "__main__":
+    science = reduce_science_frame()
+    print('she ran')
 
-def do_aperture_photometry(positions, radii):
 
-    output_file = Path("Twin_Images") / 'Twin_aperture_photometry.fits'
-    input_dir = Path("Twin_Images")
-
-    
-    
-    #Opening the data and turning it into flaot 32
-    for f in sorted(input_dir.glob('Twin_Images/twin_science_reduced.fits')):
-        with fits.open(f) as image:
-            image_data = image[0].data.astype('f4')
-
-    rows = []
-
-    #Doing a loop over the star
-    for p in positions:
-        #Creating dictionary with stars position
-        row = {'xcenter': p[0], 'ycenter': p[1]}
-
-        #Looping over the radii for each star
-        for r in radii:
-            
-            # Doing the aperture and annulus stuff for one star
-            aperture = CircularAperture(p, r=r)
-            annulus = CircularAnnulus(p, r_in=sky_radius_in, r_out=sky_radius_in + sky_annulus_width)
-
-            # Calculating the aperture and annulus photometry
-            phot_ap = aperture_photometry(image_data, aperture)
-            stats = ApertureStats(image_data, annulus, sigma_clip=None)
-
-            # finding area of circle and subtracting the sky background to find total flux
-            aperture_area = aperture.area
-            background = stats.median * aperture_area
-            flux = phot_ap['aperture_sum'][0] - background
-
-            #Storing results in dictionary with star position and flux 
-            row[f'flux_r{int(r)}'] = flux
-            plt.plot(flux, label=f'Radius {r}')
-            
-        plt.imshow(image_data, cmap = 'inferno', origin = 'lower', aspect = 'auto')
-        plt.colorbar()
-        plt.savefig(Path("Twin_Images") / 'Twin_photometry.png')
-        plt.tight_layout()
-        plt.close()
-
-        #Putting the data into emtpy list
-        rows.append(row)
-
-    # Creating astropy table from dictionary data and adding radii/sky as metadata stuff
-    table = Table(rows)
-    table.meta['radii'] = radii
-    table.meta['sky_radius'] = sky_radius_in
-
-    plt.imshow(image_data, cmap = 'inferno', origin = 'lower', aspect = 'auto')
-    plt.colorbar()
-    plt.savefig(Path("Twin_Images") / 'Twin_photometry.png')
-    plt.tight_layout()
-    plt.close()
-
-    table.write(output_file, format='fits', overwrite=True)
-
-    
-    return 
 #if __name__ == "__main__":
  #   photometry = do_aperture_photometry(positions, radii)
   #  print("It has printed")
 
-def plot_radial_profile(aperture_photometry_data, output_filename="radial_profile.png"):
+def calculate_gain():
+    output_file = Path("Twin_Images") / 'Twin_gain.fits'
+    input_dir = Path("Data")
+    
 
-    #Calling radii from aperture data as a array        
-    radii = np.array(aperture_photometry_data.meta['radii'], dtype = float)
+    flat1_path = input_dir / "domeflat_H-Alpha_001.fits"  # replace with actual filename
+    flat2_path = input_dir / "domeflat_H-Alpha_002.fits"  # replace with actual filename
 
-    #Getting the sky radius, also from aperture data
-    sky_radius = aperture_photometry_data.meta['sky_radius']
+    flat1 = fits.getdata(flat1_path).astype(np.float32)
+    flat2 = fits.getdata(flat2_path).astype(np.float32)
 
-    #taking first flux data for each r 
-    fluxes = [aperture_photometry_data[f'flux_r{int(r)}'][0] for r in radii]
+    
+    bias_path = Path("Twin_Images") / "twin_master_bias.fits"
+    bias = fits.getdata(bias_path).astype(np.float32)
 
-    #Plotting radii and fluxes
-    plt.figure()
-    plt.plot(radii, fluxes, marker='o', label='Target')
-
-    #Sky radius position on graph 
-    plt.axvline(sky_radius, color='gray', linestyle='--', label='Sky radius')
-
-    #Making it look nice
-    plt.xlabel('Radius')
-    plt.ylabel('Flux')
-    plt.legend()
-    plt.tight_layout()
-
-    #Saving everything
-    plt.savefig(output_filename)
-    plt.close()
-
-def calculate_gain(files):
-
-    #Creating empty list to store data in
-    flats = []
-
-    #Opening files data
-    for f in files:
-        with fits.open(f) as file: 
-
-            #Trimming data
-            trim = file[0].data[1600:2000, 1300:1700]
-
-            #Putting it into empty list
-            flats.append(trim)
-
-    #Unpacking flats
-    flats1, flats2 = flats
-
+    flat1 -= bias
+    flat2 -= bias
     #Getting the difference of the two flats
-    flat_diff = flats1 - flats2
+    flat_diff = flat1 - flat2
 
     #Calculating variance 
     flat_var = np.var(flat_diff)
 
     #Getting average between the two
-    mean = 0.5 * np.mean(flats1 + flats2)
+    mean = 0.5 * np.mean(flat1 + flat2)
 
     #Getting the gain with formula 
     gain = 2 * mean / flat_var
 
+    print(f"Gain = {gain:.3f} e⁻/ADU")
     return gain
+if __name__ == "__main__":
+    gain = calculate_gain()
 
+def calculate_readout_noise():
 
-def calculate_readout_noise(files, gain):
+    output_file = Path("Twin_Images") / 'Twin_readout.fits'
+    input_dir = Path("Data")
+    
+    bias1_path = input_dir / "Bias_BIN1_20250603_044940.fits"
+    bias2_path = input_dir / "Bias_BIN1_20250603_044952.fits"
 
-    #Creating another empty list
-    file_data = []
+    bias1 = fits.getdata(bias1_path).astype('f4')
+    bias2 = fits.getdata(bias2_path).astype('f4')
 
-    #Opening files and trimming then putting into list
-    for f in files:
-        with fits.open(f) as file: 
-            trim = file[0].data[1000:-1000, 1000:-1000]
-            file_data.append(trim)
+    gain = 0.501
+    
+    diff = bias1 - bias2
+    bias_diff_var = np.var(diff)
+    bias_diff_mean = np.mean(diff)
+    bias_diff_std = np.std(diff)
 
-    #Unpacking files
-    bias1, bias2 = file_data
-            
-    # Calculate the variance of the difference between the two images
-    bias_diff = bias1 - bias2
-    bias_diff_var = np.var(bias_diff)
-
-    # Calculate the readout noise
     readout_noise_adu = np.sqrt(bias_diff_var / 2)
     readout_noise_e = readout_noise_adu * gain
 
+    print(f"Readout noise = {readout_noise_e:.3f} e⁻")
+  
     return readout_noise_e
-
-
-def run_reduction(data_dir):
     
-    data = Path(data_dir)
-
-    #Getting bias data
-    median_bias_path = data / "median_bias.fits"
-    bias_files = list(data.glob("Bias*.fit"))
-    create_median_bias(bias_files, median_bias_path)
-    median_bias = fits.getdata(median_bias_path).astype('f4')
-
-    #Getting dark data
-    median_dark_path = data / "median_dark.fits"
-    dark_files = list(data.glob("Dark*.fit"))
-    create_median_dark(dark_files, median_bias_path, median_dark_path)
-    median_dark = fits.getdata(median_dark_path).astype('f4')
-
-    #Getting flat data
-    median_flat_path = data / "median_flat.fits"
-    flat_files = list(data.glob("AutoFlat*.fit"))
-    create_median_flat(flat_files, median_bias_path, median_flat_path, dark_filename=median_dark_path)
-    median_flat = fits.getdata(median_flat_path).astype('f4')
-
-    #getting science data
-    science_files = sorted(data.glob("kelt-16-b-S001-R001-C*-r.fit"))
-
-    #Creating empty list to put stuff in later
-    science = []
-
-    #Opening science files
-    for s in science_files:
-        
-       #Making a path so it works correctly
-        output_filename = data / (s.stem + "_reduced.fits")
-
-
-        #Doing the actual reductions of image, something wrong here 
-        reduced_path = reduce_science_frame(s, median_bias_path, median_dark_path, median_flat_path,reduced_science_filename = output_filename)
-
-        
-        print("Type of reduced_path:", type(reduced_path))
-
-        #putting it all back into llist
-        science.append(str(reduced_path))
-
-    #Trying to open it as an image, I am not sure it is actually passing as an image
-    if science:
-        image = science[0]
-        with fits.open(image) as hdul:
-            image_data = hdul[0].data.astype('f4')
-
-        # Doing the stuff i did in one of the functions and pulling from prof examples
-        #Getting stars
-        mean, median, std = sigma_clipped_stats(image_data, sigma=3.0)
-        daofind = DAOStarFinder(fwhm=3.0, threshold=5.*std)
-        sources = daofind(image_data - median)
-
-        #Getting positions
-        positions = [(src['xcentroid'], src['ycentroid']) for src in sources]
-
-        # giving it data, idk how to pull this like i did in the functions, I am so tired
-        aperture_radius = 4
-        sky_radius_in = 6
-        sky_annulus_width = 2
-
-        #This will not work, I am passing something as a string when I am not suppposed to:(
-        #Trying to run photometry and save it
-        phot_table = do_aperture_photometry(image_data, positions, aperture_radius, sky_radius_in, sky_annulus_width, plot_path=data / "photometry_plot.png")
-
-        print(phot_table)
-
-        #Trying to save it
-        phot_table.write(data /"photometry_results.csv", format="csv", overwrite=True)
-
-
-    return 
-
-
+if __name__ == "__main__":
+    readout = calculate_readout_noise()
